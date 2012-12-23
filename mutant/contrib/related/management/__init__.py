@@ -5,9 +5,11 @@ from django.db.models.fields.related import RelatedField
 from django.dispatch.dispatcher import receiver
 
 from ....db.models import MutableModel
-from ....management import allow_syncdbs, perform_ddl
+from ....management import (allow_syncdbs, FIELD_DEFINITION_POST_SAVE_UID,
+    perform_ddl)
 from ....models import ModelDefinition
 from ....signals import mutable_class_prepared
+from ....utils import popattr
 
 from ..models import (ForeignKeyDefinition, ManyToManyFieldDefinition,
     OneToOneFieldDefinition)
@@ -66,14 +68,37 @@ def mutable_model_prepared(signal, sender, definition, existing_model_class,
         clear_opts_related_cache(model_class)
 
 
+signals.post_save.disconnect(
+    sender=ManyToManyFieldDefinition,
+    dispatch_uid=FIELD_DEFINITION_POST_SAVE_UID % ManyToManyFieldDefinition._meta.module_name
+)
+
+@receiver(signals.post_save, sender=ManyToManyFieldDefinition,
+          dispatch_uid='mutant.contrib.related.management.many_to_many_field_definition_post_save')
+def many_to_many_field_definition_post_save(sender, instance, created, **kwargs):
+    if created:
+        if instance.through is None:
+            # Create the intermediary table
+            field = instance.get_bound_field()
+            model = field.rel.through
+            opts = field.rel.through._meta
+            table_name = opts.db_table
+            fields = tuple((field.name, field) for field in opts.fields)
+            perform_ddl(model, 'create_table', table_name, fields)
+    else:
+        # Flush the intermediary table
+        pass
+
+
 @receiver(signals.pre_delete, sender=ManyToManyFieldDefinition,
           dispatch_uid='mutant.contrib.related.management.many_to_many_field_definition_pre_delete')
 def many_to_many_field_definition_pre_delete(sender, instance, **kwargs):
     model_class = instance.model_def.model_class()
     field = model_class._meta.get_field(str(instance.name))
-    intermediary_table_name = field.rel.through._meta.db_table
+    intermediary_model_class = field.rel.through
+    intermediary_table_name = intermediary_model_class._meta.db_table
     instance._state._m2m_deletion = (
-        allow_syncdbs(model_class),
+        intermediary_model_class,
         intermediary_table_name
     )
 
@@ -81,7 +106,5 @@ def many_to_many_field_definition_pre_delete(sender, instance, **kwargs):
 @receiver(signals.post_delete, sender=ManyToManyFieldDefinition,
           dispatch_uid='mutant.contrib.related.management.many_to_many_field_definition_post_delete')
 def many_to_many_field_definition_post_delete(sender, instance, **kwargs):
-    syncdbs, intermediary_table_name = instance._state._m2m_deletion
-    for db in syncdbs:
-        db.delete_table(intermediary_table_name)
-    del instance._state._m2m_deletion
+    model, table_name = popattr(instance._state, '_m2m_deletion')
+    perform_ddl(model, 'delete_table', table_name)
