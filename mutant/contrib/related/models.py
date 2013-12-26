@@ -69,8 +69,7 @@ class RelatedFieldDefinition(FieldDefinition):
             return self.to.model_class()
 
     def clean(self):
-        if (None not in (self.related_name, self.to_id) and
-            not self.to_model_class_is_mutable):
+        if self.related_name and self.to_id and not self.to_model_class_is_mutable:
             msg = _('Cannot assign a related manager to non-mutable model')
             raise ValidationError({'related_name': [msg]})
 
@@ -206,7 +205,7 @@ class ManyToManyFieldDefinition(RelatedFieldDefinition):
         else:
             messages = {}
 
-        if (self.symmetrical is not None and 
+        if (self.symmetrical is not None and
             not self.is_recursive_relationship):
             msg = _("The relationship can only be symmetrical or not if it's "
                     "recursive, i. e. it points to 'self'")
@@ -224,7 +223,7 @@ class ManyToManyFieldDefinition(RelatedFieldDefinition):
                 messages.setdefault('symmetrical', []).append(msg)
 
             seen_from, seen_to = 0, 0
-            to_model = self.to.model_class()  
+            to_model = self.to.model_class()
             through_class = self.through.model_class()
             from_model = self.model_def.cached_model
             for field in through_class._meta.fields:
